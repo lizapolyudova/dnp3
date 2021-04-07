@@ -555,6 +555,11 @@ impl OutstationSession {
             self.on_link_activity();
         }
 
+        self.next_link_status = self
+            .config
+            .keep_alive_timeout
+            .map(|delay| crate::tokio::time::Instant::now() + delay);
+
         Ok(())
     }
 
