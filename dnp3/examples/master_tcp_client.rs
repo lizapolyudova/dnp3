@@ -10,6 +10,32 @@ use dnp3::link::*;
 use dnp3::master::*;
 use dnp3::tcp::*;
 
+// ANCHOR: master_channel_config
+fn get_master_channel_config() -> Result<MasterChannelConfig, Box<dyn std::error::Error>> {
+    let mut config = MasterChannelConfig::new(EndpointAddress::from(1)?);
+    config.decode_level = AppDecodeLevel::ObjectValues.into();
+    Ok(config)
+}
+// ANCHOR_END: master_channel_config
+
+// ANCHOR: association_config
+fn get_association_config() -> AssociationConfig {
+    let mut config = AssociationConfig::new(
+        // disable unsolicited first (Class 1/2/3)
+        EventClasses::all(),
+        // after the integrity poll, enable unsolicited (Class 1/2/3)
+        EventClasses::all(),
+        // perform startup integrity poll with Class 1/2/3/0
+        Classes::all(),
+        // don't automatically scan Class 1/2/3 when the corresponding IIN bit is asserted
+        EventClasses::none(),
+    );
+    config.auto_time_sync = Some(TimeSyncProcedure::Lan);
+    config.keep_alive_timeout = Some(Duration::from_secs(60));
+    config
+}
+// ANCHOR_END: association_config
+
 /*
   Example of using the master API from within the Tokio runtime.
   The program initializes a master and then enters a loop reading console input
@@ -28,37 +54,40 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .init();
     // ANCHOR_END: logging
 
-    // spawn the master onto another task
-    let mut master = spawn_master_tcp_client(
+    // spawn the master channel onto another task
+    // ANCHOR: create_master_channel
+    let mut channel = spawn_master_tcp_client(
         LinkErrorMode::Close,
-        MasterConfig::new(
-            EndpointAddress::from(1)?,
-            AppDecodeLevel::ObjectValues.into(),
-            Timeout::from_secs(1)?,
-        ),
+        get_master_channel_config()?,
         EndpointList::new("127.0.0.1:20000".to_owned(), &[]),
-        ReconnectStrategy::default(),
-        Listener::None,
+        ConnectStrategy::default(),
+        NullListener::create(),
     );
+    // ANCHOR_END: create_master_channel
 
-    // Create the association
-    let mut config = AssociationConfig::default();
-    config.enable_unsol_classes = EventClasses::none();
-    config.auto_time_sync = Some(TimeSyncProcedure::Lan);
-    config.keep_alive_timeout = Some(Duration::from_secs(60));
-    let mut association = master
-        .add_association(EndpointAddress::from(1024)?, config, NullHandler::boxed())
+    // ANCHOR: association_create
+    let mut association = channel
+        .add_association(
+            EndpointAddress::from(1024)?,
+            get_association_config(),
+            NullReadHandler::boxed(),
+            DefaultAssociationHandler::boxed(),
+        )
         .await?;
+    // ANCHOR_END: association_create
 
-    // Create event poll
+    // create an event poll
+    // ANCHOR: add_poll
     let mut poll = association
         .add_poll(
             EventClasses::all().to_classes().to_request(),
             Duration::from_secs(5),
         )
         .await?;
+    // ANCHOR_END: add_poll
 
-    master.enable().await?;
+    // enable communications
+    channel.enable().await?;
 
     let mut reader = FramedRead::new(tokio::io::stdin(), LinesCodec::new());
 
@@ -66,16 +95,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         match reader.next().await.unwrap()?.as_str() {
             "x" => return Ok(()),
             "enable" => {
-                master.enable().await?;
+                channel.enable().await?;
             }
             "disable" => {
-                master.disable().await?;
+                channel.disable().await?;
             }
             "dln" => {
-                master.set_decode_level(DecodeLevel::nothing()).await?;
+                channel.set_decode_level(DecodeLevel::nothing()).await?;
             }
             "dlv" => {
-                master
+                channel
                     .set_decode_level(AppDecodeLevel::ObjectValues.into())
                     .await?;
             }
@@ -99,6 +128,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
             "cmd" => {
+                // ANCHOR: assoc_control
                 if let Err(err) = association
                     .operate(
                         CommandMode::SelectBeforeOperate,
@@ -111,6 +141,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 {
                     tracing::warn!("error: {}", err);
                 }
+                // ANCHOR_END: assoc_control
             }
             "evt" => poll.demand().await?,
             "lts" => {

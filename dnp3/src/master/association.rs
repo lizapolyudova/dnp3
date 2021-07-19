@@ -20,11 +20,12 @@ use crate::master::tasks::auto::AutoTask;
 use crate::master::tasks::time::TimeSyncTask;
 use crate::master::tasks::NonReadTask::TimeSync;
 use crate::master::tasks::{AssociationTask, ReadTask, Task};
-use crate::master::ReadType;
+use crate::master::{ReadHandler, ReadType};
 use crate::tokio::time::Instant;
 use crate::util::Smallest;
 
-#[derive(Copy, Clone)]
+/// Configuration for a master association
+#[derive(Debug, Copy, Clone)]
 pub struct AssociationConfig {
     /// The event classes to disable on startup
     pub disable_unsol_classes: EventClasses,
@@ -55,13 +56,37 @@ pub struct AssociationConfig {
 impl AssociationConfig {
     const DEFAULT_MAX_QUEUED_USER_REQUESTS: usize = 16;
 
-    pub fn quiet(auto_tasks_retry_strategy: RetryStrategy) -> Self {
+    /// Construct an `AssociationConfig` specifying the unsolicited, integrity, and auto event scan behaviors
+    ///
+    /// Other fields are set to defaults
+    pub fn new(
+        disable_unsol_classes: EventClasses,
+        enable_unsol_classes: EventClasses,
+        startup_integrity_classes: Classes,
+        event_scan_on_events_available: EventClasses,
+    ) -> Self {
+        Self {
+            disable_unsol_classes,
+            enable_unsol_classes,
+            startup_integrity_classes,
+            auto_time_sync: None,
+            auto_tasks_retry_strategy: RetryStrategy::default(),
+            keep_alive_timeout: None,
+            auto_integrity_scan_on_buffer_overflow: false,
+            event_scan_on_events_available,
+            max_queued_user_requests: Self::DEFAULT_MAX_QUEUED_USER_REQUESTS,
+        }
+    }
+
+    /// Construct an `AssociationConfig` which will not perform any of the default handshaking
+    /// at the beginning of the communications session.
+    pub fn quiet() -> Self {
         Self {
             disable_unsol_classes: EventClasses::none(),
             enable_unsol_classes: EventClasses::none(),
             startup_integrity_classes: Classes::none(),
             auto_time_sync: None,
-            auto_tasks_retry_strategy,
+            auto_tasks_retry_strategy: RetryStrategy::default(),
             keep_alive_timeout: None,
             auto_integrity_scan_on_buffer_overflow: false,
             event_scan_on_events_available: EventClasses::none(),
@@ -75,7 +100,7 @@ impl Default for AssociationConfig {
         Self {
             disable_unsol_classes: EventClasses::all(),
             enable_unsol_classes: EventClasses::all(),
-            startup_integrity_classes: Classes::integrity(),
+            startup_integrity_classes: Classes::all(),
             auto_time_sync: None,
             auto_tasks_retry_strategy: RetryStrategy::default(),
             keep_alive_timeout: None,
@@ -250,7 +275,8 @@ pub(crate) struct Association {
     request_queue: VecDeque<Task>,
     max_request_queue_size: usize,
     auto_tasks: TaskStates,
-    handler: Box<dyn AssociationHandler>,
+    read_handler: Box<dyn ReadHandler>,
+    assoc_handler: Box<dyn AssociationHandler>,
     config: AssociationConfig,
     polls: PollMap,
     next_link_status: Option<Instant>,
@@ -262,7 +288,8 @@ impl Association {
     pub(crate) fn new(
         address: EndpointAddress,
         config: AssociationConfig,
-        handler: Box<dyn AssociationHandler>,
+        read_handler: Box<dyn ReadHandler>,
+        assoc_handler: Box<dyn AssociationHandler>,
     ) -> Self {
         Self {
             address,
@@ -271,7 +298,8 @@ impl Association {
             request_queue: VecDeque::new(),
             max_request_queue_size: config.max_queued_user_requests,
             auto_tasks: TaskStates::new(),
-            handler,
+            read_handler,
+            assoc_handler,
             config,
             polls: PollMap::new(),
             next_link_status: config
@@ -332,7 +360,7 @@ impl Association {
     }
 
     pub(crate) fn get_system_time(&self) -> Option<Timestamp> {
-        self.handler.get_system_time()
+        self.assoc_handler.get_system_time()
     }
 
     pub(crate) fn complete_poll(&mut self, id: u64) {
@@ -479,7 +507,7 @@ impl Association {
                     ReadType::Unsolicited,
                     response.header,
                     objects,
-                    self.handler.get_read_handler(),
+                    self.read_handler.as_mut(),
                 );
             }
 
@@ -501,7 +529,7 @@ impl Association {
             ReadType::StartupIntegrity,
             header,
             objects,
-            self.handler.get_read_handler(),
+            self.read_handler.as_mut(),
         );
     }
 
@@ -514,7 +542,7 @@ impl Association {
             ReadType::PeriodicPoll,
             header,
             objects,
-            self.handler.get_read_handler(),
+            self.read_handler.as_mut(),
         );
     }
 
@@ -527,7 +555,7 @@ impl Association {
             ReadType::PeriodicPoll,
             header,
             objects,
-            self.handler.get_read_handler(),
+            self.read_handler.as_mut(),
         );
     }
 
@@ -540,7 +568,7 @@ impl Association {
             ReadType::SinglePoll,
             header,
             objects,
-            self.handler.get_read_handler(),
+            self.read_handler.as_mut(),
         );
     }
 

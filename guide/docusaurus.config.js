@@ -1,11 +1,13 @@
+const path = require('path');
 const samplePlugin = require('./plugins/sample');
 const mermaidPlugin = require('./plugins/mermaid');
+const sitedata = require('./sitedata.json');
 
 module.exports = {
-  title: 'DNP3 <version>',
+  title: `DNP3 ${sitedata.version}`,
   tagline: 'Pretty sure we don\'t need this page, just the docs',
-  url: 'https://your-docusaurus-test-site.com',
-  baseUrl: '/',
+  url: 'https://docs.stepfunc.io',
+  baseUrl: `/dnp3/${sitedata.version}/guide/`,
   onBrokenLinks: 'throw',
   onBrokenMarkdownLinks: 'warn',
   favicon: 'images/brand/favicon.png',
@@ -14,14 +16,14 @@ module.exports = {
   themeConfig: {
     prism: {
       theme: require('prism-react-renderer/themes/vsLight'),
-      additionalLanguages: ['rust', 'java', 'csharp'],
+      additionalLanguages: ['rust', 'java', 'csharp', 'cmake'],
     },
     colorMode: {
       defaultMode: 'light',
       disableSwitch: true,
     },
     navbar: {
-      title: 'DNP3 <version>',
+      title: `DNP3 ${sitedata.version}`,
       logo: {
         alt: 'Logo',
         src: 'images/brand/logo.svg',
@@ -36,32 +38,6 @@ module.exports = {
       },
       links: [
         {
-          title: 'DNP3',
-          items: [
-            {
-              label: 'User Group',
-              to: 'https://dnp.org',
-            },
-            {
-              label: 'IEEE 1815-2012',
-              to: 'https://standards.ieee.org/standard/1815-2012.html',
-            },
-          ],
-        },
-        {
-          title: 'Library',
-          items: [
-            {
-              label: 'Github',
-              href: 'https://stackoverflow.com/questions/tagged/docusaurus',
-            },
-            {
-              label: 'Homepage',
-              href: 'https://stepfunc.io/products/libraries/dnp3/',
-            },
-          ],
-        },
-        {
           title: 'Step Function I/O',
           items: [
             {
@@ -71,6 +47,32 @@ module.exports = {
             {
               label: 'Blog',
               to: 'https://stepfunc.io/blog/',
+            },
+          ],
+        },
+        {
+          title: 'Library',
+          items: [
+            {
+              label: 'GitHub',
+              href: sitedata.github_url,
+            },
+            {
+              label: 'Homepage',
+              href: 'https://stepfunc.io/products/libraries/dnp3/',
+            },
+          ],
+        },
+        {
+          title: 'DNP3',
+          items: [
+            {
+              label: 'User Group',
+              to: 'https://dnp.org',
+            },
+            {
+              label: 'IEEE 1815-2012',
+              to: 'https://standards.ieee.org/standard/1815-2012.html',
             },
           ],
         },
@@ -95,4 +97,5 @@ module.exports = {
       },
     ],
   ],
+  plugins: [path.resolve(__dirname, './plugins/changelog')],
 };

@@ -1,7 +1,7 @@
 ﻿using System;
 using System.Threading.Tasks;
 using System.Collections.Generic;
-using dnp3rs;
+using dnp3;
 
 class MainClass
 {
@@ -138,13 +138,15 @@ class MainClass
         }
     }
 
-    class TestTimeProvider : ITimeProvider
+    // ANCHOR: association_handler
+    class TestAssocationHandler : IAssociationHandler
     {
-        public TimeProviderTimestamp GetTime()
+        public TimestampUtc GetCurrentTime()
         {
-            return TimeProviderTimestamp.Valid((ulong)DateTime.UtcNow.Subtract(DateTime.UnixEpoch).TotalMilliseconds);
+            return TimestampUtc.Valid((ulong)DateTime.UtcNow.Subtract(DateTime.UnixEpoch).TotalMilliseconds);
         }
     }
+    // ANCHOR_END: association_handler
 
     public static void Main(string[] args)
     {
@@ -158,56 +160,77 @@ class MainClass
         // ANCHOR_END: logging_init
 
         // ANCHOR: runtime_init
-        using (var runtime = new Runtime(new RuntimeConfig { NumCoreThreads = 4 }))
+        var runtime = new Runtime(new RuntimeConfig { NumCoreThreads = 4 });
         // ANCHOR_END: runtime_init
+
+        // ANCHOR: create_master_channel
+        var channel = MasterChannel.CreateTcpChannel(
+            runtime,
+            LinkErrorMode.Close,
+            GetMasterChannelConfig(),
+            new EndpointList("127.0.0.1:20000"),
+            new ConnectStrategy(),            
+            new TestListener()
+        );
+        // ANCHOR_END: create_master_channel
+
+        try
         {
-            MainAsync(runtime).GetAwaiter().GetResult();
+            RunChannel(channel).GetAwaiter().GetResult();
+        }
+        finally
+        {
+            // ANCHOR: runtime_shutdown
+            runtime.Shutdown();
+            // ANCHOR_END: runtime_shutdown
         }
     }
 
-    private static MasterConfig GetMasterConfig()
+    // ANCHOR: master_channel_config
+    private static MasterChannelConfig GetMasterChannelConfig()
     {
-        // create a default configuration with a master address of "1"
-        var config = new MasterConfig(1);
-        
+        var config = new MasterChannelConfig(1);
         config.DecodeLevel.Application = AppDecodeLevel.ObjectValues;
-
         return config;
     }
+    // ANCHOR_END: master_channel_config
 
-    private static async Task MainAsync(Runtime runtime)
+    // ANCHOR: association_config
+    private static AssociationConfig GetAssociationConfig()
     {
+        var config = new AssociationConfig(
+            // disable unsolicited first (Class 1/2/3)
+            EventClasses.All(),
+            // after the integrity poll, enable unsolicited (Class 1/2/3)
+            EventClasses.All(),
+            // perform startup integrity poll with Class 1/2/3/0
+            Classes.All(),
+            // don't automatically scan Class 1/2/3 when the corresponding IIN bit is asserted
+            EventClasses.None()
+        );
+        config.AutoTimeSync = AutoTimeSync.Lan;
+        config.KeepAliveTimeout = TimeSpan.FromSeconds(60);
+        return config;
+    }
+    // ANCHOR_END: association_config
 
-        var master = Master.CreateTcpSession(
-            runtime,
-            LinkErrorMode.Close,
-            GetMasterConfig(),
-            new EndpointList("127.0.0.1:20000"),
-            new RetryStrategy(),
-            TimeSpan.FromSeconds(1),
-            new TestListener()
-        );
-        
-        var association = master.AddAssociation(
+    private static async Task RunChannel(MasterChannel channel)
+    {
+        // ANCHOR: association_create
+        var association = channel.AddAssociation(
             1024,
-            new AssociationConfig(EventClasses.All(), EventClasses.All(), Classes.All(), EventClasses.None())
-            {
-                AutoTimeSync = AutoTimeSync.Lan,
-                AutoTasksRetryStrategy = new RetryStrategy
-                {
-                    MinDelay = TimeSpan.FromSeconds(1),
-                    MaxDelay = TimeSpan.FromSeconds(5),
-                },
-                KeepAliveTimeout = TimeSpan.FromSeconds(60),
-            },
-            new TestReadHandler(),            
-            new TestTimeProvider()
+            GetAssociationConfig(),
+            new TestReadHandler(),
+            new TestAssocationHandler()
         );
-        
-        var poll = master.AddPoll(association, Request.ClassRequest(false, true, true, true), TimeSpan.FromSeconds(5));
+        // ANCHOR_END: association_create
+
+        // ANCHOR: add_poll
+        var poll = channel.AddPoll(association, Request.ClassRequest(false, true, true, true), TimeSpan.FromSeconds(5));
+        // ANCHOR_END: add_poll
 
         // start communications
-        master.Enable();
+        channel.Enable();
 
         while (true)
         {
@@ -217,29 +240,29 @@ class MainClass
                     return;
                 case "enable":
                     {
-                        master.Enable();
+                        channel.Enable();
                         break;
                     }
                 case "disable":
                     {
-                        master.Disable();
+                        channel.Disable();
                         break;
                     }
                 case "dln":
                     {
-                        master.SetDecodeLevel(new DecodeLevel());
+                        channel.SetDecodeLevel(new DecodeLevel());
                         break;
                     }
                 case "dlv":
-                    {                        
-                        master.SetDecodeLevel(new DecodeLevel() { Application = AppDecodeLevel.ObjectValues });
+                    {
+                        channel.SetDecodeLevel(new DecodeLevel() { Application = AppDecodeLevel.ObjectValues });
                         break;
                     }
                 case "rao":
                     {
                         var request = new Request();
                         request.AddAllObjectsHeader(Variation.Group40Var0);
-                        var result = await master.Read(association, request);
+                        var result = await channel.Read(association, request);
                         Console.WriteLine($"Result: {result}");
                         break;
                     }
@@ -248,53 +271,55 @@ class MainClass
                         var request = new Request();
                         request.AddAllObjectsHeader(Variation.Group10Var0);
                         request.AddAllObjectsHeader(Variation.Group40Var0);
-                        var result = await master.Read(association, request);
+                        var result = await channel.Read(association, request);
                         Console.WriteLine($"Result: {result}");
                         break;
                     }
                 case "cmd":
                     {
+                        // ANCHOR: assoc_control
                         var commands = new Commands();
                         commands.AddG12v1u8(3, new G12v1(new ControlCode(TripCloseCode.Nul, false, OpType.LatchOn), 1, 1000, 1000));
-                        var result = await master.Operate(association, CommandMode.SelectBeforeOperate, commands);
+                        var result = await channel.Operate(association, CommandMode.SelectBeforeOperate, commands);
                         Console.WriteLine($"Result: {result}");
+                        // ANCHOR_END: assoc_control
                         break;
                     }
                 case "evt":
                     {
-                        master.DemandPoll(poll);                        
+                        channel.DemandPoll(poll);
                         break;
-                    }                    
+                    }
                 case "lts":
                     {
-                        var result = await master.SynchronizeTime(association, TimeSyncMode.Lan);
+                        var result = await channel.SynchronizeTime(association, TimeSyncMode.Lan);
                         Console.WriteLine($"Result: {result}");
                         break;
                     }
                 case "nts":
                     {
-                        var result = await master.SynchronizeTime(association, TimeSyncMode.NonLan);
+                        var result = await channel.SynchronizeTime(association, TimeSyncMode.NonLan);
                         Console.WriteLine($"Result: {result}");
                         break;
                     }
                 case "crt":
                     {
-                        var result = await master.ColdRestart(association);
+                        var result = await channel.ColdRestart(association);
                         Console.WriteLine($"Result: {result}");
                         break;
                     }
                 case "wrt":
                     {
-                        var result = await master.WarmRestart(association);
+                        var result = await channel.WarmRestart(association);
                         Console.WriteLine($"Result: {result}");
                         break;
                     }
                 case "lsr":
                     {
-                        var result = await master.CheckLinkStatus(association);
+                        var result = await channel.CheckLinkStatus(association);
                         Console.WriteLine($"Result: {result}");
                         break;
-                    }                    
+                    }
                 default:
                     Console.WriteLine("Unknown command");
                     break;

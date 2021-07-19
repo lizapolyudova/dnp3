@@ -1,9 +1,9 @@
-package io.stepfunc.dnp3rs_conformance
+package io.stepfunc.dnp3_conformance
 
 import com.automatak.dnp4s.dnp3.app._
 import com.automatak.dnp4s.dnp3.{IntegrationPlugin, PluginReporter}
 import com.automatak.dnp4s.protocol.parsing.UInt8
-import io.stepfunc.dnp3rs.{AddressFilter, Analog, AnalogOutputStatus, Binary, BinaryOutputStatus, Counter, DoubleBit, DoubleBitBinary, EventBufferConfig, FrozenCounter, LinkErrorMode, Outstation, Runtime, RuntimeConfig, TcpServer}
+import io.stepfunc.dnp3.{AddressFilter, Analog, AnalogOutputStatus, Binary, BinaryOutputStatus, Counter, DoubleBit, DoubleBitBinary, EventBufferConfig, FrozenCounter, LinkErrorMode, Outstation, Runtime, RuntimeConfig, TcpServer}
 import org.joou.UInteger
 import org.joou.Unsigned.{uint, ushort}
 
@@ -11,7 +11,7 @@ import java.time.Duration
 import scala.collection.mutable
 import scala.reflect.ClassTag
 
-class Dnp3rsIntegrationPlugin extends IntegrationPlugin {
+class Dnp3IntegrationPlugin extends IntegrationPlugin {
   private var runtime: Runtime = _
   private var server: TcpServer = _
   private var outstation: Outstation = _
@@ -39,7 +39,7 @@ class Dnp3rsIntegrationPlugin extends IntegrationPlugin {
 
   override def setLinkLayerConfirm(reporter: PluginReporter, value: Boolean): Unit = {
     if(value) {
-      throw new RuntimeException("Confirmed link-layer is not supported by dnp3rs")
+      throw new RuntimeException("Confirmed link-layer is not supported by dnp3")
     }
   }
 
@@ -783,8 +783,9 @@ class Dnp3rsIntegrationPlugin extends IntegrationPlugin {
     val app = new CustomOutstationApplication(config.testDatabaseConfig.isGlobalLocalControl || config.testDatabaseConfig.isSingleLocalControl)
     val information = new CustomOutstationInformation
     this.controlHandler = new QueuedControlHandler(config.commandHandlerConfig.disableBinaryOutput, config.commandHandlerConfig.disableAnalogOutput)
+    val listener = new CustomConnectionStateListener
 
-    val dnp3Config = new io.stepfunc.dnp3rs.OutstationConfig(ushort(config.linkConfig.source), ushort(config.linkConfig.destination))
+    val dnp3Config = new io.stepfunc.dnp3.OutstationConfig(ushort(config.linkConfig.source), ushort(config.linkConfig.destination))
 
     // Outstation config
     dnp3Config.features.selfAddress = config.linkConfig.selfAddressSupport
@@ -804,7 +805,7 @@ class Dnp3rsIntegrationPlugin extends IntegrationPlugin {
     dnp3Config.maxUnsolicitedRetries = config.unsolicitedResponseConfig.maxNumRetries.map(x => uint(x)).getOrElse(UInteger.MAX)
 
     // Create the outstation
-    this.outstation = server.addOutstation(dnp3Config, EventBufferConfig.allTypes(ushort(200)), app, information, controlHandler, AddressFilter.any())
+    this.outstation = server.addOutstation(dnp3Config, EventBufferConfig.allTypes(ushort(200)), app, information, controlHandler, listener, AddressFilter.any())
 
     // Create the database
     this.trackingDatabase = new TrackingDatabase(app, this.outstation, config.testDatabaseConfig)
@@ -815,7 +816,7 @@ class Dnp3rsIntegrationPlugin extends IntegrationPlugin {
 
   private def shutdown(): Unit = {
     if(runtime != null) {
-      runtime.close()
+      runtime.shutdown()
       runtime = null
     }
   }

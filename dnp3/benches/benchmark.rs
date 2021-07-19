@@ -109,7 +109,7 @@ struct Pair {
     // have to hold onto this to keep TCP server alive
     _server: ServerHandle,
     // have to hold onto this to keep master alive
-    _master: MasterHandle,
+    _master: MasterChannel,
     // count of matching measurements received
     rx: tokio::sync::mpsc::Receiver<usize>,
     // used to update the database
@@ -120,7 +120,7 @@ impl Pair {
     const LOCALHOST: std::net::IpAddr = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1));
 
     fn update_values(&mut self) {
-        self.outstation.database.transaction(|db| {
+        self.outstation.transaction(|db| {
             for x in self.values.once() {
                 x.apply(db)
             }
@@ -151,20 +151,20 @@ impl Pair {
     async fn spawn_outstation(port: u16, config: TestConfig) -> (ServerHandle, OutstationHandle) {
         let mut server =
             TcpServer::new(LinkErrorMode::Close, SocketAddr::new(Self::LOCALHOST, port));
-        let (outstation, task) = server
+        let outstation = server
             .add_outstation(
                 Self::get_outstation_config(config.outstation_level),
                 EventBufferConfig::all_types(100),
                 DefaultOutstationApplication::create(),
                 DefaultOutstationInformation::create(),
                 DefaultControlHandler::create(),
+                NullListener::create(),
                 AddressFilter::Any,
             )
             .unwrap();
-        tokio::spawn(task);
 
         // set up the database
-        outstation.database.transaction(|db| {
+        outstation.transaction(|db| {
             for i in 0..=config.max_index {
                 db.add(
                     i,
@@ -195,8 +195,7 @@ impl Pair {
             }
         });
 
-        let (server_handle, task) = server.bind().await.unwrap();
-        tokio::spawn(task);
+        let server_handle = server.bind().await.unwrap();
 
         (server_handle, outstation)
     }
@@ -205,7 +204,7 @@ impl Pair {
         port: u16,
         config: TestConfig,
     ) -> (
-        MasterHandle,
+        MasterChannel,
         Measurements,
         tokio::sync::mpsc::Receiver<usize>,
     ) {
@@ -213,8 +212,8 @@ impl Pair {
             LinkErrorMode::Close,
             Self::get_master_config(config.master_level),
             EndpointList::single(format!("127.0.0.1:{}", port)),
-            ReconnectStrategy::default(),
-            Listener::None,
+            ConnectStrategy::default(),
+            NullListener::create(),
         );
 
         let measurements = Measurements::new(config.max_index, config.num_values);
@@ -232,6 +231,7 @@ impl Pair {
                 Self::outstation_address(),
                 Self::get_association_config(),
                 Box::new(handler),
+                DefaultAssociationHandler::boxed(),
             )
             .await
             .unwrap();
@@ -249,16 +249,14 @@ impl Pair {
         EndpointAddress::from(1).unwrap()
     }
 
-    fn get_master_config(level: DecodeLevel) -> MasterConfig {
-        MasterConfig::new(
-            Self::master_address(),
-            level,
-            Timeout::from_secs(5).unwrap(),
-        )
+    fn get_master_config(level: DecodeLevel) -> MasterChannelConfig {
+        let mut config = MasterChannelConfig::new(EndpointAddress::from(1).unwrap());
+        config.decode_level = level;
+        config
     }
 
     fn get_association_config() -> AssociationConfig {
-        let mut config = AssociationConfig::quiet(RetryStrategy::default());
+        let mut config = AssociationConfig::quiet();
         config.enable_unsol_classes = EventClasses::all();
         config
     }
@@ -354,11 +352,7 @@ impl ReadHandler for TestHandler {
     }
 }
 
-impl AssociationHandler for TestHandler {
-    fn get_read_handler(&mut self) -> &mut dyn ReadHandler {
-        self
-    }
-}
+impl AssociationHandler for TestHandler {}
 
 // don't need to send every type
 #[derive(Copy, Clone, PartialEq, Debug)]
@@ -393,10 +387,24 @@ impl Random {
         }
     }
 
+    // make sure the value and flags are consistent
+    fn normalize_flags(binary: Binary) -> Binary {
+        if binary.value {
+            Binary::new(
+                binary.value,
+                binary.flags | Flags::new(0b1000_0000),
+                binary.time.unwrap(),
+            )
+        } else {
+            let raw = binary.flags.value & 0b0111_1111;
+            Binary::new(binary.value, Flags::new(raw), binary.time.unwrap())
+        }
+    }
+
     fn measurement(&mut self) -> Measurement {
         match self.inner.gen_range(0..=2) {
             0 => Measurement::Binary(
-                Binary::new(self.inner.gen(), self.flags(), self.time()).normalize(),
+                Self::normalize_flags(Binary::new(self.inner.gen(), self.flags(), self.time())),
                 self.index(),
             ),
             1 => Measurement::Counter(

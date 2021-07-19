@@ -1,0 +1,45 @@
+---
+id: controls
+title: ControlHandler Interface
+sidebar_label: ControlHandler
+slug: /api/outstation/controls
+---
+
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+
+The `ControlHandler` interface lets application code receive control requests. Each request begins with a call to `beginFragment` and ends
+with a call to `endFragment`. These callbacks are helpful if you want the application to handle operations atomically or in batches of some sort. 
+
+
+## Handling SELECT
+
+The `select*` methods of `ControlHandler` are called when a properly formatted `SELECT` messaged is received from the master.  Selecting a control
+point should never cause the point to operate.  Instead, think of this request from the master to mean, "Do you support this?"
+
+```mermaid
+sequenceDiagram
+    Master->>Outstation: select;
+    Outstation->>Master: response;
+    Master->>Outstation: operate;
+    Outstation->>Master: response;
+```
+
+DNP3 masters can also use a "select-before-operate" strategy to execute controls. The rules for how outstations process these
+two-pass control messages are complex. The library will handle all these rules for you automatically.
+
+## Handling OPERATE
+
+The `operate*` methods of `ControlHandler` are called when the outstation receives either:
+
+* `OPERATE` function code preceded by a matching `SELECT`.
+* `DIRECT_OPERATE` function code (single-pass control with response).
+* `DIRECT_OPERATE_NO_RESPONSE` function code (single-pass control without a response).
+
+A reference to the `Database` also lets you update point values in response to a control request. While you would typically use it to update `BinaryOutputStatus` and `AnalogOutputStatus` values, you can also use it to update other types if required by the application.
+For example, you might maintain the number of control operations performed in a DNP3 counter value.
+
+:::note
+The OperateType enum lets you identify which of the three operate function codes invoked the method. You can probably ignore this value. The specification requires all three control methodologies be supported and result in the same action.
+:::
+

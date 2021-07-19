@@ -1,0 +1,87 @@
+---
+id: tcp_client
+title: TCP Client
+sidebar_label: TCP Client
+slug: /api/master/tcp_client
+---
+
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+
+A `MasterChannel` presents the same interface once you create it, regardless of the underlying transport. You can create a TCP client channel using the runtime,
+configuration data, and a callback to observe the status of the connection.
+
+<Tabs
+groupId="language"
+defaultValue="Rust"
+values={[
+{label: 'Rust', value: 'Rust'},
+{label: 'C', value: 'C'},
+{label: 'Java', value: 'Java'},
+{label: 'C#', value: 'C#'},
+]}>
+<TabItem value="Rust">
+
+```rust
+{{#include ../dnp3/examples/master_tcp_client.rs:create_master_channel}}
+```
+
+:::note
+The function is called within the context of the Tokio runtime, and is therefore implicit in Rust.
+:::
+
+</TabItem>
+<TabItem value="C">
+
+```c
+{{#include ../ffi/bindings/c/master_example.c:channel_decl}}
+{{#include ../ffi/bindings/c/master_example.c:error_decl}}
+
+{{#include ../ffi/bindings/c/master_example.c:create_master_channel}}
+// check error
+```
+
+</TabItem>
+<TabItem value="Java">
+
+```java
+{{#include ../ffi/bindings/java/examples/src/main/java/io/stepfunc/dnp3/examples/MasterExample.java:create_master_channel}}
+```
+
+</TabItem>
+<TabItem value="C#">
+
+```csharp
+{{#include ../ffi/bindings/dotnet/examples/master/Program.cs:create_master_channel}}
+```
+
+</TabItem>
+</Tabs>
+
+## Enabling
+
+A `MasterChannel` won't start communicating until you call the `enable` method. This gives you the opportunity to configure all the associations on the channel, as discussed in the next section. You can also `disable` the channel to put it in an inactive state.
+
+## LinkErrorMode
+
+The `LinkErrorMode` controls what happens if it detects a framing error at the link-layer. TCP is a lossless transport, so the default behavior is to
+close the connection. However, you can treat a TCP channel like a serial port by changing the setting to `LinkErrorMode::Discard`.
+
+## EndpointList
+
+An `EndpointList` is a list of remote endpoints that the master will try to connect to. It must contain at least one entry, with the option to include additional backup
+addresses. The channel will round-robin through this list until it establishes a connection. The list may contain endpoints consisting of a `<host>:<port>` tuple where "host" is one of the following:
+
+* IPv4 address
+* IPv6 address
+* Domain name
+
+## ConnectStrategy
+
+The `ConnectStrategy` controls the rate at which the master retries failed connection attempts. The master uses exponential backoff when attempting to establish
+a connection. The delay between attempts doubles from `minConnectDelay` up to `maxConnectDelay`. If a connection fails after previously connecting, it will
+wait `reconnectDelay` before the next attempt.
+
+## ClientStateListener
+
+The `ClientStateListener` interface has a single callback to inform the application about the state of connection.

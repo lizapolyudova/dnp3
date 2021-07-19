@@ -15,8 +15,9 @@ pub struct Timestamp {
 }
 
 impl Timestamp {
+    /// Maximum allowed DNP3 timestamp value (48-bits)
     pub const MAX_VALUE: u64 = 0x0000_FFFF_FFFF_FFFF;
-    pub const OUT_OF_RANGE: &'static str = "<out of range>";
+    pub(crate) const OUT_OF_RANGE: &'static str = "<out of range>";
 
     /// Create a timestamp from a count of milliseconds since epoch
     pub fn new(value: u64) -> Self {
@@ -103,7 +104,7 @@ impl DoubleBit {
         }
     }
 
-    pub(crate) fn to_bit_pair(&self) -> BitPair {
+    pub(crate) fn to_bit_pair(self) -> BitPair {
         match self {
             DoubleBit::Intermediate => BitPair::new(false, false),
             DoubleBit::DeterminedOff => BitPair::new(false, true),
@@ -112,7 +113,7 @@ impl DoubleBit {
         }
     }
 
-    pub(crate) fn to_byte(&self) -> u8 {
+    pub(crate) fn to_byte(self) -> u8 {
         match self {
             DoubleBit::Intermediate => 0b00,
             DoubleBit::DeterminedOff => 0b01,

@@ -7,11 +7,9 @@ use crate::decode::AppDecodeLevel;
 use crate::link::header::{FrameInfo, FrameType};
 use crate::link::{EndpointAddress, LinkErrorMode};
 use crate::master::association::AssociationConfig;
-use crate::master::handle::{
-    AssociationHandle, AssociationHandler, HeaderInfo, MasterHandle, ReadHandler,
-};
+use crate::master::handle::{AssociationHandle, HeaderInfo, MasterChannel, ReadHandler};
 use crate::master::session::{MasterSession, RunError};
-use crate::master::ReadType;
+use crate::master::{DefaultAssociationHandler, ReadType};
 use crate::tokio::test::*;
 use crate::transport::create_master_transport_layer;
 use crate::util::phys::PhysLayer;
@@ -36,7 +34,7 @@ pub(crate) fn create_association(
         MasterSession::MIN_TX_BUFFER_SIZE,
         rx,
     );
-    let mut master = MasterHandle::new(tx);
+    let mut master = MasterChannel::new(tx);
 
     let (mut reader, mut writer) = create_master_transport_layer(
         LinkErrorMode::Close,
@@ -54,8 +52,12 @@ pub(crate) fn create_association(
     let handler = CountHandler::new();
     let num_requests = handler.num_requests.clone();
     let association = {
-        let mut add_task =
-            spawn(master.add_association(outstation_address, config, Box::new(handler)));
+        let mut add_task = spawn(master.add_association(
+            outstation_address,
+            config,
+            Box::new(handler),
+            DefaultAssociationHandler::boxed(),
+        ));
         assert_pending!(add_task.poll());
         assert_pending!(master_task.poll());
         assert_ready!(add_task.poll()).unwrap()
@@ -79,12 +81,6 @@ impl CountHandler {
         Self {
             num_requests: Arc::new(AtomicU64::new(0)),
         }
-    }
-}
-
-impl AssociationHandler for CountHandler {
-    fn get_read_handler(&mut self) -> &mut dyn ReadHandler {
-        self
     }
 }
 
@@ -153,7 +149,7 @@ impl ReadHandler for CountHandler {
 
 pub(crate) struct TestHarness<F: Future<Output = RunError>> {
     pub(crate) session: Spawn<F>,
-    pub(crate) master: MasterHandle,
+    pub(crate) master: MasterChannel,
     pub(crate) association: AssociationHandle,
     pub(crate) num_requests: Arc<AtomicU64>,
     pub(crate) io: io::Handle,

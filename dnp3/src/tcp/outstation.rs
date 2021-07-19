@@ -1,6 +1,6 @@
 use tracing::Instrument;
 
-use crate::app::Shutdown;
+use crate::app::{Listener, Shutdown};
 use crate::link::LinkErrorMode;
 use crate::outstation::database::EventBufferConfig;
 use crate::outstation::task::OutstationTask;
@@ -33,6 +33,8 @@ pub struct ServerHandle {
 }
 
 impl TcpServer {
+    /// create a TCP server builder object that will eventually be bound
+    /// to the specified address
     pub fn new(link_error_mode: LinkErrorMode, address: std::net::SocketAddr) -> Self {
         Self {
             link_error_mode,
@@ -42,13 +44,16 @@ impl TcpServer {
         }
     }
 
-    pub fn add_outstation(
+    /// associate an outstation with the TcpServer, but do not spawn it
+    #[allow(clippy::too_many_arguments)]
+    pub fn add_outstation_no_spawn(
         &mut self,
         config: OutstationConfig,
         event_config: EventBufferConfig,
         application: Box<dyn OutstationApplication>,
         information: Box<dyn OutstationInformation>,
         control_handler: Box<dyn ControlHandler>,
+        listener: Box<dyn Listener<ConnectionState>>,
         filter: AddressFilter,
     ) -> Result<(OutstationHandle, impl std::future::Future<Output = ()>), FilterError> {
         for item in self.outstations.iter() {
@@ -66,7 +71,7 @@ impl TcpServer {
             control_handler,
         );
 
-        let (mut adapter, tx) = OutstationTaskAdapter::create(task);
+        let (mut adapter, tx) = OutstationTaskAdapter::create(task, listener);
 
         let outstation = OutstationInfo {
             filter,
@@ -87,28 +92,38 @@ impl TcpServer {
         Ok((handle, future))
     }
 
-    pub fn spawn_outstation(
+    /// associate an outstation with the TcpServer and spawn it
+    ///
+    /// Must be called from within the Tokio runtime
+    #[allow(clippy::too_many_arguments)]
+    pub fn add_outstation(
         &mut self,
         config: OutstationConfig,
         event_config: EventBufferConfig,
         application: Box<dyn OutstationApplication>,
         information: Box<dyn OutstationInformation>,
         control_handler: Box<dyn ControlHandler>,
+        listener: Box<dyn Listener<ConnectionState>>,
         filter: AddressFilter,
     ) -> Result<OutstationHandle, FilterError> {
-        let (handle, future) = self.add_outstation(
+        let (handle, future) = self.add_outstation_no_spawn(
             config,
             event_config,
             application,
             information,
             control_handler,
+            listener,
             filter,
         )?;
         crate::tokio::spawn(future);
         Ok(handle)
     }
 
-    pub async fn bind(
+    /// Consume the `TcpServer` builder object, bind it to pre-specified port, and return a (ServerHandle, Future)
+    /// tuple.
+    ///
+    /// This may be called outside the Tokio runtime and allows for manual spawning
+    pub async fn bind_no_spawn(
         mut self,
     ) -> Result<(ServerHandle, impl std::future::Future<Output = Shutdown>), crate::tokio::io::Error>
     {
@@ -128,8 +143,13 @@ impl TcpServer {
         Ok((handle, task))
     }
 
-    pub async fn bind_and_spawn(self) -> Result<ServerHandle, crate::tokio::io::Error> {
-        let (handle, future) = self.bind().await?;
+    /// Consume the `TcpServer` builder object, bind it to pre-specified port, and spawn the server
+    /// task onto the Tokio runtime. Returns a ServerHandle that will shut down the server and all
+    /// associated outstations when dropped.
+    ///
+    /// This must be called from within the Tokio runtime
+    pub async fn bind(self) -> Result<ServerHandle, crate::tokio::io::Error> {
+        let (handle, future) = self.bind_no_spawn().await?;
         crate::tokio::spawn(future);
         Ok(handle)
     }

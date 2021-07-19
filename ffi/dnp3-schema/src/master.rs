@@ -14,14 +14,16 @@ pub fn define(lib: &mut LibraryBuilder, shared: &SharedDefinitions) -> Result<()
 
     let endpoint_list = define_endpoint_list(lib)?;
 
-    let master_config = define_master_config(lib, shared)?;
+    let master_channel_config = define_master_channel_config(lib, shared)?;
 
     let tcp_client_state_listener = define_tcp_client_state_listener(lib)?;
 
-    let master_class = lib.declare_class("Master")?;
+    let master_channel_class = lib.declare_class("MasterChannel")?;
 
-    let master_create_tcp_session_fn = lib
-        .declare_native_function("master_create_tcp_session")?
+    let connect_strategy = define_connect_strategy(lib)?;
+
+    let master_channel_create_tcp_fn = lib
+        .declare_native_function("master_channel_create_tcp")?
         .param(
             "runtime",
             Type::ClassRef(shared.runtime_class.clone()),
@@ -34,8 +36,8 @@ pub fn define(lib: &mut LibraryBuilder, shared: &SharedDefinitions) -> Result<()
         )?
         .param(
             "config",
-            Type::Struct(master_config.clone()),
-            "Master configuration",
+            Type::Struct(master_channel_config.clone()),
+            "Generic configuration for the channel",
         )?
         .param(
             "endpoints",
@@ -44,13 +46,8 @@ pub fn define(lib: &mut LibraryBuilder, shared: &SharedDefinitions) -> Result<()
         )?
         .param(
             "connect_strategy",
-            Type::Struct(shared.retry_strategy.clone()),
-            "Connection retry strategy to use",
-        )?
-        .param(
-            "reconnect_delay",
-            Type::Duration(DurationMapping::Milliseconds),
-            "delay before reconnecting after a disconnect",
+            Type::Struct(connect_strategy),
+            "Controls the timing of (re)connection attempts",
         )?
         .param(
             "listener",
@@ -58,49 +55,46 @@ pub fn define(lib: &mut LibraryBuilder, shared: &SharedDefinitions) -> Result<()
             "TCP connection listener used to receive updates on the status of the connection",
         )?
         .return_type(ReturnType::new(
-            Type::ClassRef(master_class.clone()),
+            Type::ClassRef(master_channel_class.clone()),
             "Handle to the master created, {null} if an error occurred",
         ))?
         .fails_with(shared.error_type.clone())?
-        .doc("Create a master TCP session connecting to the specified endpoint(s)")?
+        .doc("Create a master channel that connects to the specified TCP endpoint(s)")?
         .build()?;
 
-    let master_create_serial_session_fn = lib
-        .declare_native_function("master_create_serial_session")?
+    let master_channel_create_serial_fn = lib
+        .declare_native_function("master_channel_create_serial")?
         .param("runtime", Type::ClassRef(shared.runtime_class.clone()), "Runtime to use to drive asynchronous operations of the master")?
-        .param("config", Type::Struct(master_config), "Master configuration")?
+        .param("config", Type::Struct(master_channel_config), "Generic configuration for the channel")?
         .param("path", Type::String, "Path to the serial device. Generally /dev/tty0 on Linux and COM1 on Windows.")?
         .param("serial_params", Type::Struct(shared.serial_port_settings.clone()), "Serial port settings")?
         .param("open_retry_delay", Type::Duration(DurationMapping::Milliseconds), "delay between attempts to open the serial port")?
         .param("listener", Type::Interface(shared.port_state_listener.clone()), "Listener to receive updates on the status of the serial port")?
-        .return_type(ReturnType::new(Type::ClassRef(master_class.clone()), "Handle to the master created, {null} if an error occurred"))?
+        .return_type(ReturnType::new(Type::ClassRef(master_channel_class.clone()), "Handle to the master created, {null} if an error occurred"))?
         .fails_with(shared.error_type.clone())?
         .doc(
-            doc("Create a master session on the specified serial port")
-                .details("The returned master must be gracefully shutdown with {class:Master.[destructor]} when done.")
+            doc("Create a master channel on the specified serial port")
+                .details("The returned master must be gracefully shutdown with {class:MasterChannel.[destructor]} when done.")
         )?
         .build()?;
 
     let destroy_fn = lib
-        .declare_native_function("master_destroy")?
+        .declare_native_function("master_channel_destroy")?
         .param(
-            "master",
-            Type::ClassRef(master_class.clone()),
-            "Master to destroy",
+            "channel",
+            Type::ClassRef(master_channel_class.clone()),
+            "{class:MasterChannel} to destroy",
         )?
         .return_type(ReturnType::void())?
-        .doc(
-            doc("Remove and destroy a master.")
-                .warning("This method must NOT be called from within the {class:Runtime} thread."),
-        )?
+        .doc("Shutdown a {class:MasterChannel} and release all resources")?
         .build()?;
 
     let enable_fn = lib
-        .declare_native_function("master_enable")?
+        .declare_native_function("master_channel_enable")?
         .param(
-            "master",
-            Type::ClassRef(master_class.clone()),
-            "master to enable",
+            "channel",
+            Type::ClassRef(master_channel_class.clone()),
+            "{class:MasterChannel} to enable",
         )?
         .return_type(ReturnType::Void)?
         .fails_with(shared.error_type.clone())?
@@ -108,11 +102,11 @@ pub fn define(lib: &mut LibraryBuilder, shared: &SharedDefinitions) -> Result<()
         .build()?;
 
     let disable_fn = lib
-        .declare_native_function("master_disable")?
+        .declare_native_function("master_channel_disable")?
         .param(
-            "master",
-            Type::ClassRef(master_class.clone()),
-            "master to disable",
+            "channel",
+            Type::ClassRef(master_channel_class.clone()),
+            "{class:MasterChannel} to disable",
         )?
         .return_type(ReturnType::Void)?
         .fails_with(shared.error_type.clone())?
@@ -124,16 +118,16 @@ pub fn define(lib: &mut LibraryBuilder, shared: &SharedDefinitions) -> Result<()
 
     let association_config = define_association_config(lib, shared)?;
 
-    let time_provider_interface = define_time_provider(lib)?;
+    let association_handler_interface = define_association_handler(lib)?;
 
     let request_class = crate::request::define(lib, shared)?;
 
     let add_association_fn = lib
-        .declare_native_function("master_add_association")?
+        .declare_native_function("master_channel_add_association")?
         .param(
-            "master",
-            Type::ClassRef(master_class.clone()),
-            "Master on which the association will be created",
+            "channel",
+            Type::ClassRef(master_channel_class.clone()),
+            "{class:MasterChannel} on which the association will be created",
         )?
         .param(
             "address",
@@ -151,24 +145,24 @@ pub fn define(lib: &mut LibraryBuilder, shared: &SharedDefinitions) -> Result<()
             "Interface uses to load measurement data",
         )?
         .param(
-            "time_provider",
-            Type::Interface(time_provider_interface),
-            "Time provider for the association",
+            "association_handler",
+            Type::Interface(association_handler_interface),
+            "Association specific callbacks such as time synchronization",
         )?
         .return_type(ReturnType::new(
             Type::Struct(association_id.clone()),
             "Id of the association",
         ))?
         .fails_with(shared.error_type.clone())?
-        .doc("Add an association to the master")?
+        .doc("Add an association to the channel")?
         .build()?;
 
     let remove_association_fn = lib
-        .declare_native_function("master_remove_association")?
+        .declare_native_function("master_channel_remove_association")?
         .param(
-            "master",
-            Type::ClassRef(master_class.clone()),
-            "Master on which to apply the operation",
+            "channel",
+            Type::ClassRef(master_channel_class.clone()),
+            "{class:MasterChannel} on which to apply the operation",
         )?
         .param(
             "id",
@@ -177,14 +171,14 @@ pub fn define(lib: &mut LibraryBuilder, shared: &SharedDefinitions) -> Result<()
         )?
         .return_type(ReturnType::void())?
         .fails_with(shared.error_type.clone())?
-        .doc("Remove an association from the master")?
+        .doc("Remove an association from the channel")?
         .build()?;
 
-    let add_poll_fn = lib.declare_native_function("master_add_poll")?
+    let add_poll_fn = lib.declare_native_function("master_channel_add_poll")?
         .param(
-            "master",
-            Type::ClassRef(master_class.clone()),
-            "Master on which to apply the operation",
+            "channel",
+            Type::ClassRef(master_channel_class.clone()),
+            "{class:MasterChannel} on which to apply the operation",
         )?
         .param("id", Type::Struct(association_id.clone()), "Association on which to add the poll")?
         .param("request", Type::ClassRef(request_class.declaration()), "Request to perform")?
@@ -194,15 +188,14 @@ pub fn define(lib: &mut LibraryBuilder, shared: &SharedDefinitions) -> Result<()
         .doc(
             doc("Add a periodic poll to an association")
                 .details("Each result of the poll will be sent to the {interface:ReadHandler} of the association.")
-                .warning("This cannot be called from within a callback.")
         )?
         .build()?;
 
-    let remove_poll_fn = lib.declare_native_function("master_remove_poll")?
+    let remove_poll_fn = lib.declare_native_function("master_channel_remove_poll")?
         .param(
-            "master",
-            Type::ClassRef(master_class.clone()),
-            "Master on which to apply the operation",
+            "channel",
+            Type::ClassRef(master_channel_class.clone()),
+            "{class:MasterChannel} on which to apply the operation",
         )?
         .param("poll_id", Type::Struct(poll_id.clone()), "Id of the created poll")?
         .return_type(ReturnType::Void)?
@@ -210,32 +203,31 @@ pub fn define(lib: &mut LibraryBuilder, shared: &SharedDefinitions) -> Result<()
         .doc(
             doc("Add a periodic poll to an association")
                 .details("Each result of the poll will be sent to the {interface:ReadHandler} of the association.")
-                .warning("This cannot be called from within a callback.")
         )?
         .build()?;
 
-    let demand_poll_fn = lib.declare_native_function("master_demand_poll")?
+    let demand_poll_fn = lib.declare_native_function("master_channel_demand_poll")?
         .param(
-            "master",
-            Type::ClassRef(master_class.clone()),
-            "Master on which to apply the operation",
+            "channel",
+            Type::ClassRef(master_channel_class.clone()),
+            "{class:MasterChannel} on which to apply the operation",
         )?
         .param("poll_id", Type::Struct(poll_id), "Id of the poll")?
         .return_type(ReturnType::void())?
         .fails_with(shared.error_type.clone())?
         .doc(
-            doc("Demand the immediate execution of a poll previously created with {class:Master.AddPoll()}.")
+            doc("Demand the immediate execution of a poll previously created with {class:MasterChannel.AddPoll()}.")
                 .details("This method returns immediately. The result will be sent to the registered {interface:ReadHandler}.")
                 .details("This method resets the internal timer of the poll.")
         )?
         .build()?;
 
     let set_decode_level_fn = lib
-        .declare_native_function("master_set_decode_level")?
+        .declare_native_function("master_channel_set_decode_level")?
         .param(
-            "master",
-            Type::ClassRef(master_class.clone()),
-            "Master on which to apply the operation",
+            "channel",
+            Type::ClassRef(master_channel_class.clone()),
+            "{class:MasterChannel} on which to apply the operation",
         )?
         .param(
             "decode_level",
@@ -244,32 +236,29 @@ pub fn define(lib: &mut LibraryBuilder, shared: &SharedDefinitions) -> Result<()
         )?
         .return_type(ReturnType::void())?
         .fails_with(shared.error_type.clone())?
-        .doc("Set the master decoding level for log messages")?
+        .doc("Set the decoding level for the channel")?
         .build()?;
 
     let get_decode_level_fn = lib
-        .declare_native_function("master_get_decode_level")?
+        .declare_native_function("master_channel_get_decode_level")?
         .param(
-            "master",
-            Type::ClassRef(master_class.clone()),
-            "{class:Master} to get the decode level from",
+            "channel",
+            Type::ClassRef(master_channel_class.clone()),
+            "{class:MasterChannel} on which to apply the operation",
         )?
         .return_type(ReturnType::new(
             Type::Struct(shared.decode_level.clone()),
             "Decode level",
         ))?
         .fails_with(shared.error_type.clone())?
-        .doc(
-            doc("Get the master decoding level for log messages")
-                .warning("This cannot be called from within a callback."),
-        )?
+        .doc("Get the decoding level for the channel")?
         .build()?;
 
     let read_callback = define_read_callback(lib)?;
 
     let read_fn = lib
-        .declare_native_function("master_read")?
-        .param("master", Type::ClassRef(master_class.clone()), "Master on which to perform the operation")?
+        .declare_native_function("master_channel_read")?
+        .param("channel", Type::ClassRef(master_channel_class.clone()), "{class:MasterChannel} on which to perform the operation")?
         .param("association", Type::Struct(association_id.clone()), "Association on which to perform the read")?
         .param("request", Type::ClassRef(request_class.declaration()), "Request to send")?
         .param("callback", Type::Interface(read_callback), "Callback that will be invoked once the read is complete")?
@@ -286,11 +275,11 @@ pub fn define(lib: &mut LibraryBuilder, shared: &SharedDefinitions) -> Result<()
     let command_cb = define_command_callback(lib)?;
 
     let operate_fn = lib
-        .declare_native_function("master_operate")?
+        .declare_native_function("master_channel_operate")?
         .param(
-            "master",
-            Type::ClassRef(master_class.clone()),
-            "Master on which to perform the operation",
+            "channel",
+            Type::ClassRef(master_channel_class.clone()),
+            "{class:MasterChannel} on which to perform the operation",
         )?
         .param(
             "association",
@@ -317,11 +306,11 @@ pub fn define(lib: &mut LibraryBuilder, shared: &SharedDefinitions) -> Result<()
     let time_sync_cb = define_time_sync_callback(lib)?;
 
     let perform_time_sync_fn = lib
-        .declare_native_function("master_sync_time")?
+        .declare_native_function("master_channel_sync_time")?
         .param(
-            "master",
-            Type::ClassRef(master_class.clone()),
-            "Master on which to perform the operation",
+            "channel",
+            Type::ClassRef(master_channel_class.clone()),
+            "{class:MasterChannel} on which to perform the operation",
         )?
         .param(
             "association",
@@ -342,11 +331,11 @@ pub fn define(lib: &mut LibraryBuilder, shared: &SharedDefinitions) -> Result<()
     let restart_cb = define_restart_callback(lib)?;
 
     let cold_restart_fn = lib
-        .declare_native_function("master_cold_restart")?
+        .declare_native_function("master_channel_cold_restart")?
         .param(
-            "master",
-            Type::ClassRef(master_class.clone()),
-            "Master on which to perform the operation",
+            "channel",
+            Type::ClassRef(master_channel_class.clone()),
+            "{class:MasterChannel} on which to perform the operation",
         )?
         .param(
             "association",
@@ -364,11 +353,11 @@ pub fn define(lib: &mut LibraryBuilder, shared: &SharedDefinitions) -> Result<()
         .build()?;
 
     let warm_restart_fn = lib
-        .declare_native_function("master_warm_restart")?
+        .declare_native_function("master_channel_warm_restart")?
         .param(
-            "master",
-            Type::ClassRef(master_class.clone()),
-            "Master on which to perform the operation",
+            "channel",
+            Type::ClassRef(master_channel_class.clone()),
+            "{class:MasterChannel} on which to perform the operation",
         )?
         .param(
             "association",
@@ -388,11 +377,11 @@ pub fn define(lib: &mut LibraryBuilder, shared: &SharedDefinitions) -> Result<()
     let link_status_cb = define_link_status_callback(lib)?;
 
     let check_link_status_fn = lib
-        .declare_native_function("master_check_link_status")?
+        .declare_native_function("master_channel_check_link_status")?
         .param(
-            "master",
-            Type::ClassRef(master_class.clone()),
-            "Master on which to perform the operation",
+            "channel",
+            Type::ClassRef(master_channel_class.clone()),
+            "{class:MasterChannel} on which to perform the operation",
         )?
         .param(
             "association",
@@ -409,10 +398,10 @@ pub fn define(lib: &mut LibraryBuilder, shared: &SharedDefinitions) -> Result<()
         .doc("Asynchronously perform a link status check")?
         .build()?;
 
-    lib.define_class(&master_class)?
+    lib.define_class(&master_channel_class)?
         .destructor(&destroy_fn)?
-        .static_method("CreateTCPSession", &master_create_tcp_session_fn)?
-        .static_method("CreateSerialSession", &master_create_serial_session_fn)?
+        .static_method("CreateTCPChannel", &master_channel_create_tcp_fn)?
+        .static_method("CreateSerialChannel", &master_channel_create_serial_fn)?
         .method("Enable", &enable_fn)?
         .method("Disable", &disable_fn)?
         .method("AddAssociation", &add_association_fn)?
@@ -428,15 +417,46 @@ pub fn define(lib: &mut LibraryBuilder, shared: &SharedDefinitions) -> Result<()
         .async_method("ColdRestart", &cold_restart_fn)?
         .async_method("WarmRestart", &warm_restart_fn)?
         .async_method("CheckLinkStatus", &check_link_status_fn)?
-        .manual_destroy()?
+        .custom_destroy("Shutdown")?
         .doc(
-            doc("Master channel of communication")
-            .details("To communicate with a particular outstation, you need to add an association with {class:Master.AddAssociation()}.")
-            .warning("This cannot be called from within a callback.")
+            doc("Represents a communication channel for a master station")
+            .details("To communicate with a particular outstation, you need to add an association with {class:MasterChannel.AddAssociation()}.")
+            .warning("The class methods that return a value (e.g. as {class:MasterChannel.AddAssociation()}) cannot be called from within a callback.")
         )?
         .build()?;
 
     Ok(())
+}
+
+fn define_connect_strategy(lib: &mut LibraryBuilder) -> Result<NativeStructHandle, BindingError> {
+    let strategy = lib.declare_native_struct("ConnectStrategy")?;
+    lib.define_native_struct(&strategy)?
+        .add(
+            "min_connect_delay",
+            StructElementType::Duration(
+                DurationMapping::Milliseconds,
+                Some(std::time::Duration::from_secs(1)),
+            ),
+            "Minimum delay between two connection attempts, doubles up to the maximum delay",
+        )?
+        .add(
+            "max_connect_delay",
+            StructElementType::Duration(
+                DurationMapping::Milliseconds,
+                Some(std::time::Duration::from_secs(10)),
+            ),
+            "Maximum delay between two connection attempts",
+        )?
+        .add(
+            "reconnect_delay",
+            StructElementType::Duration(
+                DurationMapping::Milliseconds,
+                Some(std::time::Duration::from_secs(1)),
+            ),
+            "Delay before attempting a connection after a disconnect",
+        )?
+        .doc("Timing parameters for connection attempts")?
+        .build()
 }
 
 fn define_association_id(
@@ -603,22 +623,22 @@ fn define_tcp_client_state_listener(
     .build()
 }
 
-fn define_master_config(
+fn define_master_channel_config(
     lib: &mut LibraryBuilder,
     shared: &SharedDefinitions,
 ) -> std::result::Result<NativeStructHandle, BindingError> {
-    let master_config = lib.declare_native_struct("MasterConfig")?;
-    lib.define_native_struct(&master_config)?
+    let config = lib.declare_native_struct("MasterChannelConfig")?;
+    lib.define_native_struct(&config)?
         .add("address", Type::Uint16, "Local DNP3 data-link address")?
-        .add("decode_level", StructElementType::Struct(shared.decode_level.clone()), "Decoding level for this master. You can modify this later on with {class:Master.SetDecodeLevel()}.")?
+        .add("decode_level", StructElementType::Struct(shared.decode_level.clone()), "Decoding level for this master. You can modify this later on with {class:MasterChannel.SetDecodeLevel()}.")?
         .add(
             "response_timeout",
             StructElementType::Duration(DurationMapping::Milliseconds, Some(Duration::from_secs(5))),
             "Timeout for receiving a response"
         )?
-        .add("tx_buffer_size", StructElementType::Uint16(Some(2048)), doc("TX buffer size").details("Should be at least 249"))?
-        .add("rx_buffer_size", StructElementType::Uint16(Some(2048)), doc("RX buffer size").details("Should be at least 2048"))?
-        .doc("Master configuration")?
+        .add("tx_buffer_size", StructElementType::Uint16(Some(2048)), doc("TX buffer size").details("Must be at least 249"))?
+        .add("rx_buffer_size", StructElementType::Uint16(Some(2048)), doc("RX buffer size").details("Must be at least 2048"))?
+        .doc("Generic configuration for a MasterChannel")?
         .build()
 }
 
@@ -661,16 +681,16 @@ fn define_endpoint_list(
     Ok(endpoint_list_class)
 }
 
-fn define_time_provider(lib: &mut LibraryBuilder) -> Result<InterfaceHandle, BindingError> {
-    let timestamp_struct = lib.declare_native_struct("TimeProviderTimestamp")?;
+fn define_association_handler(lib: &mut LibraryBuilder) -> Result<InterfaceHandle, BindingError> {
+    let timestamp_struct = lib.declare_native_struct("TimestampUtc")?;
     let timestamp_struct = lib.define_native_struct(&timestamp_struct)?
         .add("value", Type::Uint64, doc("Value of the timestamp (in milliseconds from UNIX Epoch).").warning("Only 48 bits are available for timestamps."))?
         .add("is_valid", Type::Bool, "True if the timestamp is valid, false otherwise.")?
-        .doc(doc("Timestamp value returned by {interface:TimeProvider}.").details("{struct:TimeProviderTimestamp.value} is only valid if {struct:TimeProviderTimestamp.is_valid} is true."))?
+        .doc(doc("Timestamp value returned by {interface:AssociationHandler.get_current_time()}.").details("{struct:TimestampUtc.value} is only valid if {struct:TimestampUtc.is_valid} is true."))?
         .build()?;
 
     let valid_constructor = lib
-        .declare_native_function("timeprovidertimestamp_valid")?
+        .declare_native_function("timestamp_utc_valid")?
         .param(
             "value",
             Type::Uint64,
@@ -684,7 +704,7 @@ fn define_time_provider(lib: &mut LibraryBuilder) -> Result<InterfaceHandle, Bin
         .build()?;
 
     let invalid_constructor = lib
-        .declare_native_function("timeprovidertimestamp_invalid")?
+        .declare_native_function("timestamp_utc_invalid")?
         .return_type(ReturnType::new(
             Type::Struct(timestamp_struct.clone()),
             "Timestamp",
@@ -697,22 +717,23 @@ fn define_time_provider(lib: &mut LibraryBuilder) -> Result<InterfaceHandle, Bin
         .static_method("invalid", &invalid_constructor)?
         .build();
 
-    lib.define_interface("TimeProvider", "Current time provider")?
-        .callback(
-            "get_time",
-            doc("Returns the current time of the system.")
-                .details("This callback is called when time synchronization is performed.")
-                .details(
-                    "This can use external clock synchronization or the system clock for example.",
-                ),
-        )?
-        .return_type(ReturnType::new(
-            Type::Struct(timestamp_struct),
-            "The current time",
-        ))?
-        .build()?
-        .destroy_callback("on_destroy")?
-        .build()
+    lib.define_interface(
+        "AssociationHandler",
+        "Callbacks for a particular outstation association",
+    )?
+    .callback(
+        "get_current_time",
+        doc("Returns the current time or an invalid time if none is available")
+            .details("This callback is used when the master performs time synchronization for a particular outstation.")
+            .details("This could return the system clock or some other clock's time"),
+    )?
+    .return_type(ReturnType::new(
+        Type::Struct(timestamp_struct),
+        "The current time",
+    ))?
+    .build()?
+    .destroy_callback("on_destroy")?
+    .build()
 }
 
 fn define_event_classes(lib: &mut LibraryBuilder) -> Result<NativeStructHandle, BindingError> {
@@ -1190,7 +1211,7 @@ fn define_link_status_callback(lib: &mut LibraryBuilder) -> Result<InterfaceHand
             "TaskError",
             "The task failed for some reason (e.g. the master was shutdown)",
         )?
-        .doc("Result of a link status check. See {class:Master.CheckLinkStatus()}")?
+        .doc("Result of a link status check. See {class:MasterChannel.CheckLinkStatus()}")?
         .build()?;
 
     lib.define_interface("LinkStatusCallback", "Handler for link status check")?

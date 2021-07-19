@@ -3,14 +3,16 @@ use std::net::AddrParseError;
 use std::time::Duration;
 
 pub use database::*;
+use dnp3::app::Listener;
 use dnp3::link::{EndpointAddress, LinkErrorMode};
 use dnp3::outstation::database::{ClassZeroConfig, EventBufferConfig};
-use dnp3::outstation::{BufferSize, Feature, Features, OutstationConfig};
+use dnp3::outstation::{BufferSize, ConnectionState, Feature, Features, OutstationConfig};
 use dnp3::outstation::{BufferSizeError, OutstationHandle};
 use dnp3::tcp::{FilterError, ServerHandle};
 pub use struct_constructors::*;
 
 use crate::{ffi, Runtime, RuntimeHandle};
+
 use dnp3::serial::create_outstation_serial;
 
 mod adapters;
@@ -54,6 +56,7 @@ pub unsafe fn tcpserver_destroy(server: *mut TcpServer) {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub unsafe fn tcpserver_add_outstation(
     server: *mut TcpServer,
     config: ffi::OutstationConfig,
@@ -61,6 +64,7 @@ pub unsafe fn tcpserver_add_outstation(
     application: ffi::OutstationApplication,
     information: ffi::OutstationInformation,
     control_handler: ffi::ControlHandler,
+    listener: ffi::ConnectionStateListener,
     filter: *mut AddressFilter,
 ) -> Result<*mut Outstation, ffi::ParamError> {
     let server = server.as_mut().ok_or(ffi::ParamError::NullParameter)?;
@@ -76,12 +80,13 @@ pub unsafe fn tcpserver_add_outstation(
         .ok_or(ffi::ParamError::NullParameter)?
         .into();
 
-    let (outstation, task) = server_handle.add_outstation(
+    let (outstation, task) = server_handle.add_outstation_no_spawn(
         config,
         event_config.into(),
         Box::new(application),
         Box::new(information),
         Box::new(control_handler),
+        Box::new(listener),
         filter,
     )?;
 
@@ -104,7 +109,7 @@ pub unsafe fn tcpserver_bind(server: *mut TcpServer) -> Result<(), ffi::ParamErr
         TcpServerState::Running(_) => return Err(ffi::ParamError::ServerAlreadyStarted),
     };
 
-    let (handle, task) = server.runtime.block_on(server_handle.bind())??;
+    let (handle, task) = server.runtime.block_on(server_handle.bind_no_spawn())??;
 
     server.runtime.spawn(task)?;
     server.state = TcpServerState::Running(handle);
@@ -159,7 +164,7 @@ pub unsafe fn outstation_transaction(
     callback: ffi::OutstationTransaction,
 ) {
     if let Some(outstation) = outstation.as_mut() {
-        outstation.handle.database.transaction(|database| {
+        outstation.handle.transaction(|database| {
             callback.execute(database as *mut _);
         });
     }
@@ -208,6 +213,21 @@ fn convert_outstation_config(
         max_read_request_headers: Some(config.max_read_request_headers),
         max_controls_per_request: Some(config.max_controls_per_request),
     })
+}
+
+impl Listener<ConnectionState> for ffi::ConnectionStateListener {
+    fn update(&mut self, value: ConnectionState) {
+        self.on_change(value.into())
+    }
+}
+
+impl From<ConnectionState> for ffi::ConnectionState {
+    fn from(x: ConnectionState) -> Self {
+        match x {
+            ConnectionState::Connected => ffi::ConnectionState::Connected,
+            ConnectionState::Disconnected => ffi::ConnectionState::Disconnected,
+        }
+    }
 }
 
 impl From<&ffi::OutstationFeatures> for Features {

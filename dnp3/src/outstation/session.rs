@@ -223,7 +223,6 @@ impl SessionState {
     fn reset(&mut self) {
         self.last_valid_request = None;
         self.select = None;
-        self.unsolicited_seq = Sequence::default();
         self.deferred_read.clear();
     }
 }
@@ -628,7 +627,7 @@ impl OutstationSession {
         Some(Response::new(header, cursor.written().len()))
     }
 
-    #[allow(clippy::clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments)]
     async fn perform_unsolicited_response_series(
         &mut self,
         database: &mut DatabaseHandle,
@@ -1386,7 +1385,7 @@ impl OutstationSession {
         };
 
         // Calculate IIN and return it
-        let mut iin = self.get_response_iin(database);
+        let mut iin = Iin::default();
 
         if let Ok(CommandStatus::NotSupported) = result {
             iin |= Iin2::PARAMETER_ERROR;
@@ -1517,7 +1516,7 @@ impl OutstationSession {
         }
 
         // Calculate IIN and return response
-        let mut iin = self.get_response_iin(database);
+        let mut iin = Iin::default();
 
         if let Ok(CommandStatus::NotSupported) = result {
             iin |= Iin2::PARAMETER_ERROR;
@@ -1597,7 +1596,7 @@ impl OutstationSession {
         };
 
         // Calculate IIN and return it
-        let mut iin = self.get_response_iin(database);
+        let mut iin = Iin::default();
 
         if status == CommandStatus::NotSupported {
             iin |= Iin2::PARAMETER_ERROR;
@@ -1960,7 +1959,8 @@ impl OutstationSession {
     }
 
     fn on_link_activity(&mut self) {
-        self.config
+        self.next_link_status = self
+            .config
             .keep_alive_timeout
             .map(|timeout| crate::tokio::time::Instant::now() + timeout);
     }

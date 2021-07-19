@@ -3,16 +3,23 @@
 //! # Features
 //!
 //! * Panic-free, zero-copy, zero-allocation parsing
-//! * Focus on maximal correctness and compliance to the specification
+//! * Fully automated level 2 outstation conformance tests
 //! * Automatic TCP connection management with configurable reconnect strategy
 //! * Scalable performance using Tokio's multi-threaded executor
-//! * Future and callback-based API modes
+//!
+//! # License
+//!
+//! This crate is made available under a non-commercial / non-production license.
+//!
+//! Please inquire about commercial licensing here:
+//!
+//! <https://stepfunc.io/contact/>
 
 #![deny(
 dead_code,
 arithmetic_overflow,
 invalid_type_param_default,
-//missing_fragment_specifier,
+missing_fragment_specifier,
 mutable_transmutes,
 no_mangle_const_items,
 overflowing_literals,
@@ -38,8 +45,8 @@ unused_comparisons,
 unreachable_pub,
 anonymous_parameters,
 missing_copy_implementations,
-// missing_debug_implementations,
-// missing_docs,
+//missing_debug_implementations,
+missing_docs,
 trivial_casts,
 trivial_numeric_casts,
 unused_import_braces,
@@ -48,8 +55,8 @@ clippy::all
 )]
 #![forbid(
     unsafe_code,
-    // intra_doc_link_resolution_failure, broken_intra_doc_links
-    safe_packed_borrows,
+    broken_intra_doc_links,
+    unaligned_references,
     while_true,
     bare_trait_objects
 )]
@@ -58,6 +65,9 @@ clippy::all
 #[cfg(test)]
 #[macro_use]
 extern crate assert_matches;
+
+/// Current version of the library
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// application layer types shared by both the master and outstation APIs
 pub mod app;
